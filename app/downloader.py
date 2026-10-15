@@ -12,11 +12,10 @@ DESKTOP_HEADERS = {
     'Accept-Language': 'en-US,en;q=0.9',
 }
 
-# ⭐️ YouTube Bot Block များကို ကျော်လွှားမည့် Public Piped API Instances များ ⭐️
-PIPED_INSTANCES = [
-    "https://api.piped.private.coffee",
-    "https://pipedapi.kavin.rocks",
-    "https://pipedapi.tokhmi.xyz"
+COBALT_SERVERS = [
+    "https://api.cobalt.tools",
+    "https://co.wuk.sh",
+    "https://cobalt.api.scav.top"
 ]
 
 def extract_youtube_id(url: str) -> str:
@@ -28,33 +27,31 @@ class DownloaderEngine:
     def get_info(url: str) -> dict:
         yt_id = extract_youtube_id(url)
 
-        # ⭐️ YouTube ဖြစ်ပါက Google Bot Block မရှိသော Piped Engine ဖြင့် ဆွဲယူခြင်း ⭐️
+        # ⭐️ YouTube အတွက် Google တရားဝင် OEmbed API (ဘယ်တော့မှ Bot Block မမိပါ) ⭐️
         if yt_id:
-            for api in PIPED_INSTANCES:
-                try:
-                    res = requests.get(f"{api}/streams/{yt_id}", timeout=6)
-                    if res.status_code == 200:
-                        data = res.json()
-                        duration_secs = data.get("duration", 0)
-                        mins, secs = divmod(duration_secs, 60)
-                        
-                        return {
-                            "title": data.get("title", "YouTube Video"),
-                            "thumbnail": data.get("thumbnailUrl", f"https://i.ytimg.com/vi/{yt_id}/hqdefault.jpg"),
-                            "duration": f"{int(mins):02d}:{int(secs):02d}",
-                            "uploader": data.get("uploader", "YouTube Creator"),
-                            "sizes": {
-                                "1080": "~35.0 MB",
-                                "720": "~18.0 MB",
-                                "480": "~9.0 MB",
-                                "mp3": "~4.5 MB"
-                            },
-                            "original_url": url
-                        }
-                except Exception:
-                    continue
+            try:
+                clean_yt_url = f"https://www.youtube.com/watch?v=yt_id"
+                oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={yt_id}&format=json"
+                r = requests.get(oembed_url, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    return {
+                        "title": data.get("title", "YouTube Video"),
+                        "thumbnail": f"https://i.ytimg.com/vi/{yt_id}/hqdefault.jpg",
+                        "duration": "YouTube Video",
+                        "uploader": data.get("author_name", "YouTube Creator"),
+                        "sizes": {
+                            "1080": "~35.0 MB",
+                            "720": "~18.0 MB",
+                            "480": "~9.0 MB",
+                            "mp3": "~4.5 MB"
+                        },
+                        "original_url": url
+                    }
+            except Exception:
+                pass
 
-        # ⭐️ TikTok, Facebook, Adult Sites များအတွက် yt-dlp ဖြင့် ဆွဲယူခြင်း ⭐️
+        # ⭐️ TikTok, Facebook, Adult Sites များအတွက် မူလအတိုင်း yt-dlp သုံးခြင်း (Perfect ဖြစ်ပြီးသား) ⭐️
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -107,44 +104,35 @@ class DownloaderEngine:
     def process_download(url: str, quality: str, progress_hook=None) -> tuple[str, str]:
         yt_id = extract_youtube_id(url)
 
-        # ⭐️ YouTube ဒေါင်းလုဒ်ဆွဲခြင်း (Piped Direct Stream) ⭐️
+        # ⭐️ YouTube ဒေါင်းလုဒ်ဆွဲခြင်း (Cobalt Global Engine) ⭐️
         if yt_id:
-            for api in PIPED_INSTANCES:
+            payload = {
+                "url": f"https://www.youtube.com/watch?v={yt_id}",
+                "videoQuality": "720" if quality in ["720", "1080"] else "480",
+                "downloadMode": "audio" if quality == "mp3" else "auto"
+            }
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+            for server in COBALT_SERVERS:
                 try:
-                    res = requests.get(f"{api}/streams/{yt_id}", timeout=8)
+                    res = requests.post(f"{server}/", json=payload, headers=headers, timeout=12)
                     if res.status_code == 200:
                         data = res.json()
-                        title = clean_filename(data.get("title", "youtube_video"))
-                        
-                        target_url = None
-                        ext = "mp4"
-
-                        if quality == "mp3":
-                            audio_streams = data.get("audioStreams", [])
-                            if audio_streams:
-                                target_url = audio_streams[0].get("url")
-                                ext = "mp3"
-                        else:
-                            # Video Stream ရွေးချယ်ခြင်း
-                            video_streams = [s for s in data.get("videoStreams", []) if not s.get("videoOnly")]
-                            if not video_streams:
-                                video_streams = data.get("videoStreams", [])
-                            
-                            if video_streams:
-                                target_url = video_streams[0].get("url")
-
-                        if target_url:
+                        stream_url = data.get("url")
+                        if stream_url:
+                            ext = "mp3" if quality == "mp3" else "mp4"
                             out_path = os.path.join(DOWNLOAD_DIR, f"{yt_id}.{ext}")
-                            r = requests.get(target_url, stream=True, timeout=30)
+                            
+                            r = requests.get(stream_url, stream=True, timeout=40)
                             with open(out_path, "wb") as f:
-                                for chunk in r.iter_content(chunk_size=1024*1024):
+                                for chunk in r.iter_content(chunk_size=1024 * 1024):
                                     if chunk:
                                         f.write(chunk)
-                            return out_path, title
+                            return out_path, f"youtube_{yt_id}"
                 except Exception:
                     continue
 
-        # ⭐️ TikTok, Facebook, Adult Sites များအတွက် yt-dlp ဒေါင်းလုဒ် ⭐️
+        # ⭐️ TikTok, Facebook, Adult Sites အတွက် မူလအတိုင်း yt-dlp သုံးခြင်း ⭐️
         if quality == "mp3":
             format_str = 'ba/b'
         elif quality == "1080":
@@ -157,7 +145,6 @@ class DownloaderEngine:
             format_str = 'b/best'
 
         out_template = os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s")
-        
         ydl_opts = {
             'format': format_str,
             'outtmpl': out_template,
